@@ -78,6 +78,8 @@ func urandomcall(ceil *big.Int) string {
 	return randintstr
 }
 
+// Need to update to stream stdout vs. return one value
+// And match buflength here to that in the C binary (100000)
 func rdrandcall(canal chan string) {
 	rand64 := "DEADBEEF"
 	randbuf, _ := exec.Command(randbin).Output()
@@ -85,10 +87,10 @@ func rdrandcall(canal chan string) {
 	if err != nil {
 		// Should handle this properly
 		fmt.Println("RDRAND Fail!")
-		canal <- "DEADBEEF"
+		canal <-"DEADBEEF"
 	} else {
 		rand64 = string(randbuf)
-		canal <- rand64
+		canal <-rand64
 	}
 }
 
@@ -101,11 +103,25 @@ func main() {
 	bseedslice := bseed[:]
 	nonce := uint64(0)
 	noncearr := make([]byte, 8)
+	/*
+	nprocmap := make(map[string]int)
+	for x := 0; x < 64; x++ {
+		nprocmap[string(x)] = x
+	}
+	nprocbuf, _ := exec.Command("nproc").Output()
+	nprocstr := string(nprocbuf[0])
+	nproc := nprocmap[nprocstr]
+	fmt.Println(nprocmap)
+	*/
 	if debug == true {
 		fmt.Println("Flag settings are")
 		fmt.Println("hash", hash, "rdrand", rdrand, "count", count, "debug", debug)
 		fmt.Println("Seed is")
 		fmt.Println(seed)
+		/*
+		fmt.Println("nproc is")
+		fmt.Println(nproc)
+		*/
 	}
 	mode := 0
 	if hash == true {
@@ -138,17 +154,21 @@ func main() {
 			debugmsg(len(outmap), nonce)
 		}
 	case 1:
-		canal := make(chan string, 10000)
+		// buflength here must match the setting in the C binary
+		buflength := 10000
+		canal := make(chan string, buflength)
 		// Should change to $(nproc) threads & buffer the C binary
 		// or stream from stdout there, & restart when exhausted
 		for i := 0; i < count; i++ {
 			go rdrandcall(canal)
 		}
-		select {
-		case <- canal:
+		for {
 			rdrand64 := <-canal
 			outmap[rdrand64] = nonce
 			nonce += 1
+			if len(outmap) == count {
+				break
+			}
 		}
 		if debug == true {
 			debugmsg(len(outmap), nonce)
