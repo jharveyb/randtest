@@ -18,6 +18,9 @@ import (
 
 /* Goal is to test speed of various methods of generating random numbers.
 Here we compare /dev/urandom, SHA256, and Intel's RDRAND instruction.
+
+Can still improve by buffering calls to any RNG func.
+
 */
 
 var hash bool
