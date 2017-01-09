@@ -37,10 +37,9 @@ func init() {
 	flag.StringVar(&randbin, "randbin", "/home/jonathan/gocall", "Path to the C binary that makes RDRAND calls.")
 	}
 
-func shahash(nonce uint64, noncearr, bseedslice []byte) string {
-	binary.BigEndian.PutUint64(noncearr, nonce)
-	plain := append(bseedslice, noncearr...)
-	hash := sha256.Sum256(plain)
+func shahash(nonce uint64, bseedslice []byte) string {
+	binary.BigEndian.PutUint64(bseedslice[8:16], nonce)
+	hash := sha256.Sum256(bseedslice)
 	hashstr := hex.EncodeToString(hash[:])
 	return hashstr
 }
@@ -71,8 +70,8 @@ func main() {
 	seed, _ := rand.Int(rand.Reader, ceil)
 	bseed := seed.Bytes()
 	bseedslice := bseed[:]
-	nonce := uint64(0)
 	noncearr := make([]byte, 8)
+	bseedslice = append(bseedslice, noncearr...)
 	nproc := runtime.NumCPU()
 	runtime.GOMAXPROCS(nproc)
 	if debug == true {
@@ -111,15 +110,17 @@ func main() {
 	// with switch inside the loop though.
 	var waiter sync.WaitGroup
 	tcount := count/nproc
+	waiter.Add(nproc)
 	for n := 0; n < nproc; n++ {
-		waiter.Add(1)
-		go func () {
+		go func (n, tcount int) {
 			defer waiter.Done()
 			tnonce := 0
+			var nonce uint64
+			nonce = uint64(n*tcount)
 			switch mode {
 			case 2:
 				for i := 0; i < tcount; i++ {
-					newhash := shahash(nonce, noncearr, bseedslice)
+					newhash := shahash(nonce, bseedslice)
 					coutmap.Set(newhash, tnonce)
 					nonce += 1
 					tnonce += 1
@@ -141,7 +142,7 @@ func main() {
 				fmt.Println("nonce is")
 				fmt.Println(tnonce)
 			}
-		}()
+		}(n, tcount)
 	}
 	waiter.Wait()
 	if coutmap.Count() == count {
