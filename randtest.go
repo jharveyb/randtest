@@ -11,49 +11,60 @@ import (
 	"strconv"
 	"strings"
 	"runtime"
+	"io"
 	"sync"
 	"github.com/losalamos/rdrand"
 	"github.com/orcaman/concurrent-map"
+	gorand "github.com/tmthrgd/go-rand"
 )
 
-/* Goal is to test speed of various methods of generating random numbers.
+/* 
+Goal is to test speed of various methods of generating random numbers.
 Here we compare /dev/urandom, SHA256, and Intel's RDRAND instruction.
 
-Can still improve by buffering calls to any RNG func.
-
+Missing AES-NI because my machine doesn't support it.
 */
 
-var hash bool
+var hash string
 var intel bool
 var count int
 var debug bool
-var randbin string
 
 func init() {
-	flag.BoolVar(&hash, "hash", false, "Sets state of CSPRNG generation; false is /dev/urandom, true is SHA256")
-	flag.BoolVar(&intel, "intel", false, "Sets state of CSPRNG generation; false is /dev/urandom, true is RDRAND")
-	flag.IntVar(&count, "count", 100000, "# of random numbers generated; defaults to 1e5")
+	flag.StringVar(&hash, "hash", "none", "Sets source of random numbers; 'sha' is SHA256, 'cha' is ChaCha20")
+	flag.BoolVar(&intel, "intel", false, "Sets source of random numbers; false is /dev/urandom, true is RDRAND")
+	flag.IntVar(&count, "count", 100000, "# of random numbers generated; defaults to 100000")
 	flag.BoolVar(&debug, "debug", false, "Will print array states if true")
-	flag.StringVar(&randbin, "randbin", "/home/jonathan/gocall", "Path to the C binary that makes RDRAND calls.")
 	}
 
-func shahash(nonce uint64, bseedslice []byte) string {
+// All RNG calls return strings; overhead varies across methods.
+
+// Computes SHA256( Seed || Nonce)
+func shahash(nonce uint64, bseedslice []byte, shacache [32]byte, hashstr string) string {
 	binary.BigEndian.PutUint64(bseedslice[8:16], nonce)
-	hash := sha256.Sum256(bseedslice)
-	hashstr := hex.EncodeToString(hash[:])
+	shacache = sha256.Sum256(bseedslice)
+	hashstr = hex.EncodeToString(shacache[:])
 	return hashstr
 }
 
-func urandomcall(ceil *big.Int) string {
+func chahash(ChaRead io.Reader, chacache []byte, hashstr string) string {
+	ChaRead.Read(chacache)
+	hashstr = hex.EncodeToString(chacache[:])
+	return hashstr
+	}
+
+// Go's crypto/rand Reader, used here, uses /dev/urandom
+func urandomcall(ceil *big.Int, randintstr string) string {
 	randint, _ := rand.Int(rand.Reader, ceil)
 	brandint := randint.Bytes()
-	randintstr := hex.EncodeToString(brandint[:])
+	randintstr = hex.EncodeToString(brandint[:])
 	return randintstr
 }
 
-func rdrandcall() string {
+// Size of output here 1/4 that of other 2 RNG functions
+func rdrandcall(randstr string) string {
 	rand := rdrand.Uint64()
-	randstr := hexconv(rand)
+	randstr = hexconv(rand)
 	return randstr
 }
 
@@ -72,6 +83,8 @@ func main() {
 	bseedslice := bseed[:]
 	noncearr := make([]byte, 8)
 	bseedslice = append(bseedslice, noncearr...)
+	fmt.Println(bseedslice)
+	fmt.Println(bseedslice[8:16])
 	nproc := runtime.NumCPU()
 	runtime.GOMAXPROCS(nproc)
 	if debug == true {
@@ -79,35 +92,34 @@ func main() {
 		fmt.Println("hash", hash, "rdrand", intel, "count", count, "debug", debug)
 		fmt.Println("Seed is")
 		fmt.Println(seed)
+		fmt.Println(bseedslice)
 		fmt.Println("nproc is")
 		fmt.Println(nproc)
 	}
+	modemap := map[int]string{
+		3:"ChaCha20",2:"SHA256",1:"RDRAND",0:"/dev/urandom/",
+	}
 	mode := 0
-	if hash == true {
+	switch hash {
+	case "cha":
+		mode = 3
+	case "sha":
 		mode = 2
-	} else {
+	case "none":
 		if intel == true {
 			if rdrand.Available() == true {
 				mode = 1
 			} else {
 				fmt.Println("No RDRAND support!")
-				fmt.Println("Switching to /dev/urandom instead.")
-				mode = 0
+				fmt.Println("Using /dev/urandom.")
 			}
 		}
-	}
-	modemap := map[int]string{
-		2:"SHA256",1:"RDRAND",0:"/dev/urandom/",
 	}
 	if debug == true {
 		fmt.Println("Mode is")
 		fmt.Println(mode)
-		modename := modemap[mode]
-		fmt.Println(modename)
+		fmt.Println(modemap[mode])
 	}
-	// Chose to have loop in switch vs. switch in loop b/c assuming
-	// that this is faster. Would be less redundant code if done 
-	// with switch inside the loop though.
 	var waiter sync.WaitGroup
 	tcount := count/nproc
 	waiter.Add(nproc)
@@ -117,26 +129,31 @@ func main() {
 			tnonce := 0
 			var nonce uint64
 			nonce = uint64(n*tcount)
-			switch mode {
-			case 2:
-				for i := 0; i < tcount; i++ {
-					newhash := shahash(nonce, bseedslice)
-					coutmap.Set(newhash, tnonce)
-					nonce += 1
-					tnonce += 1
+			var randstring string
+			var cachestr string
+			hashcache := make([]byte, 32)
+			var shacache [32]byte
+			ChaRead, err := gorand.New(nil)
+			if err != nil {
+				fmt.Println("ChaRead init. failed!")
+				fmt.Println("Switching to /dev/urandom.")
+			}
+			// Tested both switch-in-for & vice-versa; no noticable
+			// speed difference with go 1.7.4 linux/amd64
+			for i := 0; i < tcount; i++ {
+				switch mode {
+				case 3:
+					randstring = chahash(ChaRead, hashcache, cachestr)
+				case 2:
+					randstring = shahash(nonce, bseedslice, shacache, cachestr)
+				case 1:
+					randstring = rdrandcall(cachestr)
+				case 0:
+					randstring = urandomcall(ceil, cachestr)
 				}
-			case 1:
-				for i := 0; i < tcount; i++ {
-					rnd := rdrandcall()
-					coutmap.Set(rnd, tnonce)
-					tnonce += 1
-				}
-			case 0:
-				for i := 0; i < tcount; i++ {
-					randstr := urandomcall(ceil)
-					coutmap.Set(randstr, tnonce)
-					tnonce += 1
-				}
+				coutmap.Set(randstring, tnonce)
+				nonce += 1
+				tnonce += 1
 			}
 			if debug == true {
 				fmt.Println("nonce is")
