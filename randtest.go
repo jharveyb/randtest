@@ -31,10 +31,10 @@ var count int
 var debug bool
 
 func init() {
-	flag.StringVar(&hash, "hash", "none", "Sets source of random numbers; 'sha' is SHA256, 'cha' is ChaCha20")
-	flag.BoolVar(&intel, "intel", false, "Sets source of random numbers; false is /dev/urandom, true is RDRAND")
-	flag.IntVar(&count, "count", 100000, "# of random numbers generated; defaults to 100000")
-	flag.BoolVar(&debug, "debug", false, "Will print array states if true")
+	flag.StringVar(&hash, "hash", "none", "hash function; 'sha' is SHA256, 'cha' is ChaCha20")
+	flag.BoolVar(&intel, "intel", false, "non-hash RNG used; false is /dev/urandom, true is RDRAND")
+	flag.IntVar(&count, "count", 100000, "# of random numbers generated")
+	flag.BoolVar(&debug, "debug", false, "Extra info on seed + state if true")
 	}
 
 // All RNG calls return strings; overhead varies across methods.
@@ -83,8 +83,6 @@ func main() {
 	bseedslice := bseed[:]
 	noncearr := make([]byte, 8)
 	bseedslice = append(bseedslice, noncearr...)
-	fmt.Println(bseedslice)
-	fmt.Println(bseedslice[8:16])
 	nproc := runtime.NumCPU()
 	runtime.GOMAXPROCS(nproc)
 	if debug == true {
@@ -92,6 +90,7 @@ func main() {
 		fmt.Println("hash", hash, "rdrand", intel, "count", count, "debug", debug)
 		fmt.Println("Seed is")
 		fmt.Println(seed)
+		fmt.Println("Seed || Nonce is")
 		fmt.Println(bseedslice)
 		fmt.Println("nproc is")
 		fmt.Println(nproc)
